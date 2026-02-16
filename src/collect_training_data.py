@@ -166,6 +166,24 @@ class TrainingDataCollector:
             json.dump(summary, f, indent=2)
         
         print(f"\n[*] Summary saved to: {summary_file}")
+        try:
+        import pwd
+        username = os.environ.get('SUDO_USER', os.environ.get('USER'))
+        if username:
+            uid = pwd.getpwnam(username).pw_uid
+            gid = pwd.getpwnam(username).pw_gid
+            
+            # Change ownership of all session files
+            for name, _, output in self.collectors:
+                if os.path.exists(output):
+                    os.chown(output, uid, gid)
+            
+            # Change ownership of summary
+            os.chown(summary_file, uid, gid)
+            
+            print(f"[*] File ownership fixed for user: {username}")
+    except:
+        pass  # Silently fail if can't change ownership
 
 def main():
     parser = argparse.ArgumentParser(description='Collect training data')
