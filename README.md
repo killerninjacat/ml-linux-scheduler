@@ -1,7 +1,7 @@
 ## Run the following command to generate the data dump in the data/raw/ directory
 
-> sudo echo "Successfully Authenticated" </br>
-> sudo python3 collect_training_data.py </br>
+``` sudo echo "Successfully Authenticated"
+sudo python3 collect_training_data.py ```
 
 ## Run the following command to form the merged dataset from the 4 .jsonl files
 
