@@ -12,3 +12,6 @@
 >   --output data/processed/final_dataset.csv`
 
 ## Run the following command to generate the graphs
+
+> sudo echo "Successfully Authenticated"
+> sudo python3 graphs/review_1.py
