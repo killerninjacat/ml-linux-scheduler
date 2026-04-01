@@ -31,5 +31,5 @@ sudo python3 graphs/review_1.py
 ### To train/validate the ML model
 
 ```
-sudo echo "Successfully Authenticated"
-suco python
+python train/train_and_validate_model.py"
+```
