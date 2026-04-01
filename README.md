@@ -1,35 +1,78 @@
-## To enter the virtual environment for Python
+## Environment
 
-```
+```bash
 source venv/bin/activate
 ```
 
-## Run the following command to generate the data dump in the data/raw/ directory
+## Collect raw traces
 
-``` 
-sudo echo "Successfully Authenticated"
-sudo python3 collect_training_data.py 
+```bash
+sudo python3 collect_training_data.py --duration 60
 ```
 
-## Run the following command to form the merged dataset from the 4 .jsonl files
+Outputs are written to data/raw with session-specific names:
+- state_<session>.jsonl
+- pmc_<session>.jsonl
+- rapl_<session>.jsonl
+- scheduler_<session>.jsonl
 
-```
-python merge_dataset.py \ 
-  --state data/raw/state_20260220_010514.jsonl \ 
-  --pmc data/raw/pmc_20260220_010514.jsonl \ 
-  --rapl data/raw/rapl_20260220_010514.jsonl \ 
-  --output data/processed/final_dataset.csv` 
+## Merge and build training dataset
+
+```bash
+python3 preprocessing/merge_dataset.py \
+  --state data/raw/state_YYYYMMDD_HHMMSS.jsonl \
+  --pmc data/raw/pmc_YYYYMMDD_HHMMSS.jsonl \
+  --rapl data/raw/rapl_YYYYMMDD_HHMMSS.jsonl \
+  --output data/processed/final_dataset.csv
 ```
 
-## Run the following command to generate the graphs
+## Train model (single run)
 
+Energy-aware loss is default in single run mode.
+
+```bash
+python3 train/train_and_validate_model.py \
+  --data-path data/processed/final_dataset.csv \
+  --model-dir models/final \
+  --run-mode single \
+  --loss-mode energy \
+  --epochs 100
 ```
-sudo echo "Successfully Authenticated"
+
+### Baseline BCE-only run
+
+```bash
+python3 train/train_and_validate_model.py \
+  --data-path data/processed/final_dataset.csv \
+  --model-dir models/final_bce \
+  --run-mode single \
+  --loss-mode bce
+```
+
+## Run ablation suite
+
+Runs three experiments on the same split/seed:
+1. baseline_bce
+2. bce_plus_power
+3. bce_plus_power_ipc
+
+```bash
+python3 train/train_and_validate_model.py \
+  --data-path data/processed/final_dataset.csv \
+  --model-dir models/ablation \
+  --run-mode ablation
+```
+
+## IPC collection requirements
+
+- Root privileges (collectors are run with sudo)
+- CPU and kernel support for hardware perf counters
+- perf_event permissions must allow counter access (commonly perf_event_paranoid <= 1)
+
+If hardware counters are unavailable, the PMC collector falls back to ipc=0 and sets ipc_available=0. The merge script keeps the pipeline runnable with this fallback, but energy-aware IPC behavior will be limited.
+
+## Optional graph generation
+
+```bash
 sudo python3 graphs/review_1.py
-```
-
-### To train/validate the ML model
-
-```
-python train/train_and_validate_model.py"
 ```

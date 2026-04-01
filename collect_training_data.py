@@ -82,6 +82,7 @@ class TrainingDataCollector:
             print("    ⚠ RAPL unavailable")
 
         time.sleep(3)
+        self.validate_pmc_output(pmc_output, strict=False)
         print("[*] All collectors initialized.")
 
     # ---------------------------------------------------
@@ -98,11 +99,60 @@ class TrainingDataCollector:
                 if os.path.exists(output):
                     lines = sum(1 for _ in open(output))
                     print(f"    ✓ {name}: {lines} samples")
+                    if name == "PMC":
+                        self.validate_pmc_output(output, strict=True)
                 else:
                     print(f"    ✗ {name}: no data")
 
             except Exception as e:
                 print(f"    ⚠ {name} error: {e}")
+
+    # ---------------------------------------------------
+
+    def validate_pmc_output(self, pmc_output, strict=False):
+        """
+        Validate that the PMC collector produced IPC fields.
+        strict=False: soft warning during startup.
+        strict=True: stronger warning after collection finishes.
+        """
+        if not os.path.exists(pmc_output) or os.path.getsize(pmc_output) == 0:
+            level = "[!]" if strict else "[*]"
+            print(f"{level} PMC output not ready yet: {pmc_output}")
+            return
+
+        samples = []
+        with open(pmc_output, 'r') as f:
+            for _, line in zip(range(100), f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    samples.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+        if not samples:
+            level = "[!]" if strict else "[*]"
+            print(f"{level} PMC output has no parseable JSON samples")
+            return
+
+        sample_keys = set(samples[0].keys())
+        required = {'instructions_retired', 'cycles', 'ipc', 'ipc_available'}
+        missing = required - sample_keys
+
+        if missing:
+            print(f"[!] PMC schema missing IPC fields: {sorted(missing)}")
+            return
+
+        ipc_available_count = sum(int(s.get('ipc_available', 0)) for s in samples)
+        nonzero_ipc_count = sum(1 for s in samples if float(s.get('ipc', 0.0)) > 0)
+
+        if ipc_available_count == 0:
+            print("[!] PMC fallback mode active: hardware counters unavailable on this host")
+        else:
+            print(f"[✓] PMC IPC fields active ({ipc_available_count}/{len(samples)} samples report availability)")
+
+        print(f"[*] PMC IPC non-zero sample windows: {nonzero_ipc_count}/{len(samples)}")
 
     # ---------------------------------------------------
 
