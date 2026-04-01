@@ -1,3 +1,9 @@
+## To enter the virtual environment for Python
+
+```
+source venv/bin/activate
+```
+
 ## Run the following command to generate the data dump in the data/raw/ directory
 
 ``` 
@@ -21,3 +27,9 @@ python merge_dataset.py \
 sudo echo "Successfully Authenticated"
 sudo python3 graphs/review_1.py
 ```
+
+### To train/validate the ML model
+
+```
+sudo echo "Successfully Authenticated"
+suco python
