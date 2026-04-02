@@ -11,6 +11,31 @@ def load_jsonl(path):
     df["timestamp"] = pd.to_numeric(df["timestamp"])
     return df
 
+
+def align_timestamp_domain(reference_df, candidate_df, name):
+    """
+    Align candidate timestamps to reference domain when scales differ (e.g.,
+    monotonic ns vs epoch ns in legacy files).
+    """
+    if reference_df.empty or candidate_df.empty:
+        return candidate_df
+
+    ref_median = float(reference_df["timestamp"].median())
+    cand_median = float(candidate_df["timestamp"].median())
+
+    if not np.isfinite(ref_median) or not np.isfinite(cand_median) or cand_median == 0:
+        return candidate_df
+
+    scale_ratio = abs(ref_median) / max(abs(cand_median), 1.0)
+    if scale_ratio > 1_000 or scale_ratio < 0.001:
+        offset = int(ref_median - cand_median)
+        print(f"[!] {name} timestamps appear in a different domain; applying offset {offset} ns")
+        adjusted = candidate_df.copy()
+        adjusted["timestamp"] = adjusted["timestamp"] + offset
+        return adjusted
+
+    return candidate_df
+
 def main():
     parser = argparse.ArgumentParser(description="Clean and Prepare Scheduler Dataset")
     parser.add_argument("--state", required=True)
@@ -23,6 +48,9 @@ def main():
     state = load_jsonl(args.state).sort_values("timestamp")
     pmc = load_jsonl(args.pmc).sort_values("timestamp")
     rapl = load_jsonl(args.rapl).sort_values("timestamp")
+
+    pmc = align_timestamp_domain(state, pmc, "PMC")
+    rapl = align_timestamp_domain(state, rapl, "RAPL")
 
     # Compute power from RAPL-native cadence before timestamp alignment.
     rapl['dt_sec'] = rapl['timestamp'].diff() / 1e9

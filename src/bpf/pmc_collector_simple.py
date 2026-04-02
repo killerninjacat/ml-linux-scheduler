@@ -22,6 +22,11 @@ class SimplePMCCollector:
         self.num_cpus = os.cpu_count()
         print(f"[*] Detected {self.num_cpus} CPUs")
 
+        # bpf_ktime_get_ns() uses a monotonic clock; normalize once per session
+        # so merged datasets align with epoch-based collectors.
+        self.mono_to_epoch_offset_ns = time.time_ns() - time.monotonic_ns()
+        print("[*] Timestamp normalization enabled: monotonic -> epoch ns")
+
         self.perf_fds = {
             'instructions': {},
             'cycles': {}
@@ -152,6 +157,7 @@ int trace_sched_switch(struct pt_regs *ctx) {{
     
     def process_event(self, cpu, data, size):
         event = self.bpf["task_events"].event(data)
+        normalized_timestamp = event.timestamp_ns + self.mono_to_epoch_offset_ns
 
         instructions_delta = 0
         cycles_delta = 0
@@ -184,7 +190,7 @@ int trace_sched_switch(struct pt_regs *ctx) {{
                 self.stats['counter_read_errors'] += 1
         
         record = {
-            'timestamp': event.timestamp_ns,
+            'timestamp': normalized_timestamp,
             'pid': event.pid,
             'cpu': event.cpu,
             'comm': event.comm.decode('utf-8', 'ignore'),

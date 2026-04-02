@@ -71,6 +71,40 @@ python3 train/train_and_validate_model.py \
 
 If hardware counters are unavailable, the PMC collector falls back to ipc=0 and sets ipc_available=0. The merge script keeps the pipeline runnable with this fallback, but energy-aware IPC behavior will be limited.
 
+## Recommended energy-loss tuning
+
+Start conservatively to avoid always-migrate behavior:
+- energy_alpha = 0.01
+- energy_beta = 0.01
+
+Then increase gradually while watching energy-case diagnostics from training output.
+
+## Single-script execution
+
+Use the full automation script:
+
+```bash
+./complete_script.sh [duration] [epochs] [run_graphs] [energy_alpha] [energy_beta] [power_threshold] [ipc_threshold] [run_sweep] [alpha_grid] [beta_grid]
+```
+
+Example:
+
+```bash
+./complete_script.sh 60 100 0 0.01 0.01 35.0 0.9
+```
+
+Sweep example (runs grid search and saves a ranked comparison table):
+
+```bash
+./complete_script.sh 60 100 0 0.01 0.01 35.0 0.9 1 "0.005,0.01,0.02" "0.005,0.01,0.02"
+```
+
+Sweep outputs:
+- results/alpha_beta_sweep.csv
+- results/alpha_beta_sweep_ranked.csv
+- results/sweeps/
+- models/sweeps/
+
 ## Optional graph generation
 
 ```bash

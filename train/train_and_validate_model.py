@@ -444,8 +444,8 @@ def parse_args():
         default="energy",
         help="Loss for single-mode run",
     )
-    parser.add_argument("--energy-alpha", type=float, default=0.02, help="Weight for power penalty")
-    parser.add_argument("--energy-beta", type=float, default=0.02, help="Weight for IPC penalty")
+    parser.add_argument("--energy-alpha", type=float, default=0.01, help="Weight for power penalty")
+    parser.add_argument("--energy-beta", type=float, default=0.01, help="Weight for IPC penalty")
     parser.add_argument("--power-threshold", type=float, default=35.0, help="Power threshold in watts")
     parser.add_argument("--ipc-threshold", type=float, default=0.9, help="IPC low-efficiency threshold")
     parser.add_argument("--disable-power-term", action="store_true")

@@ -146,11 +146,19 @@ class TrainingDataCollector:
 
         ipc_available_count = sum(int(s.get('ipc_available', 0)) for s in samples)
         nonzero_ipc_count = sum(1 for s in samples if float(s.get('ipc', 0.0)) > 0)
+        ts_values = [int(s.get('timestamp', 0)) for s in samples if 'timestamp' in s]
 
         if ipc_available_count == 0:
             print("[!] PMC fallback mode active: hardware counters unavailable on this host")
         else:
             print(f"[✓] PMC IPC fields active ({ipc_available_count}/{len(samples)} samples report availability)")
+
+        if ts_values:
+            median_ts = sorted(ts_values)[len(ts_values) // 2]
+            if median_ts < 10**15:
+                print("[!] PMC timestamps appear monotonic (non-epoch); merge alignment may be incorrect")
+            else:
+                print("[✓] PMC timestamps look epoch-aligned")
 
         print(f"[*] PMC IPC non-zero sample windows: {nonzero_ipc_count}/{len(samples)}")
 

@@ -11,6 +11,26 @@ def load_jsonl(path):
     return df.sort_values("timestamp")
 
 
+def align_timestamp_domain(reference_df, candidate_df):
+    if reference_df.empty or candidate_df.empty:
+        return candidate_df
+
+    ref_median = float(reference_df["timestamp"].median())
+    cand_median = float(candidate_df["timestamp"].median())
+
+    if not np.isfinite(ref_median) or not np.isfinite(cand_median) or cand_median == 0:
+        return candidate_df
+
+    scale_ratio = abs(ref_median) / max(abs(cand_median), 1.0)
+    if scale_ratio > 1_000 or scale_ratio < 0.001:
+        offset = int(ref_median - cand_median)
+        adjusted = candidate_df.copy()
+        adjusted["timestamp"] = adjusted["timestamp"] + offset
+        return adjusted
+
+    return candidate_df
+
+
 def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_dataset.csv"):
     print(f"[*] Loading State: {state_path}")
     state = load_jsonl(state_path)
@@ -20,6 +40,9 @@ def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_da
 
     print(f"[*] Loading RAPL: {rapl_path}")
     rapl = load_jsonl(rapl_path)
+
+    pmc = align_timestamp_domain(state, pmc)
+    rapl = align_timestamp_domain(state, rapl)
 
     rapl["dt_sec"] = rapl["timestamp"].diff() / 1e9
     rapl["dt_sec"] = rapl["dt_sec"].replace(0, np.nan)
