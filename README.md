@@ -63,13 +63,17 @@ python3 train/train_and_validate_model.py \
   --run-mode ablation
 ```
 
-## IPC collection requirements
+## IPC and cache-miss collection requirements
 
 - Root privileges (collectors are run with sudo)
 - CPU and kernel support for hardware perf counters
 - perf_event permissions must allow counter access (commonly perf_event_paranoid <= 1)
 
-If hardware counters are unavailable, the PMC collector falls back to ipc=0 and sets ipc_available=0. The merge script keeps the pipeline runnable with this fallback, but energy-aware IPC behavior will be limited.
+If hardware counters are unavailable, the PMC collector falls back to:
+- ipc=0 with ipc_available=0
+- cache_misses=0 with cache_miss_available=0
+
+The merge script keeps the pipeline runnable with this fallback, but efficiency/cache-aware behavior will be limited.
 
 ## Recommended energy-loss tuning
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PMC Collector with hardware counters (instructions, cycles, IPC)
+PMC Collector with hardware counters (instructions, cycles, cache misses, IPC)
 """
 
 from bcc import BPF, PerfType, PerfHWConfig
@@ -29,13 +29,16 @@ class SimplePMCCollector:
 
         self.perf_fds = {
             'instructions': {},
-            'cycles': {}
+            'cycles': {},
+            'cache_misses': {},
         }
         self.prev_counters = {
             'instructions': {},
-            'cycles': {}
+            'cycles': {},
+            'cache_misses': {},
         }
         self.ipc_supported = False
+        self.cache_miss_supported = False
         
         bpf_text = f"""
 #include <uapi/linux/ptrace.h>
@@ -96,10 +99,10 @@ int trace_sched_switch(struct pt_regs *ctx) {{
 
     def setup_perf_counters(self):
         """
-        Open per-CPU perf event FDs for instructions and cycles.
+        Open per-CPU perf event FDs for instructions/cycles/cache-misses.
         Values are read in userspace to derive per-event deltas and IPC.
         """
-        print("[*] Enabling hardware counters (instructions/cycles)...")
+        print("[*] Enabling hardware counters (instructions/cycles/cache-misses)...")
 
         for cpu in range(self.num_cpus):
             instr_fd = lib.bpf_open_perf_event(
@@ -124,11 +127,33 @@ int trace_sched_switch(struct pt_regs *ctx) {{
                 print("[!] Hardware counters unavailable; IPC fields will default to 0")
                 return
 
+            cache_miss_fd = lib.bpf_open_perf_event(
+                PerfType.HARDWARE,
+                PerfHWConfig.CACHE_MISSES,
+                -1,
+                cpu
+            )
+
             self.perf_fds['instructions'][cpu] = instr_fd
             self.perf_fds['cycles'][cpu] = cycles_fd
 
+            if cache_miss_fd >= 0:
+                self.perf_fds['cache_misses'][cpu] = cache_miss_fd
+            else:
+                self.stats['cache_event_open_failures'] += 1
+
         self.ipc_supported = True
         print("[✓] Hardware counters enabled")
+
+        cache_supported_cpus = len(self.perf_fds['cache_misses'])
+        if cache_supported_cpus == self.num_cpus:
+            self.cache_miss_supported = True
+            print("[✓] Cache-miss counters enabled on all CPUs")
+        elif cache_supported_cpus > 0:
+            self.cache_miss_supported = True
+            print(f"[!] Cache-miss counters partially available ({cache_supported_cpus}/{self.num_cpus} CPUs)")
+        else:
+            print("[!] Cache-miss counters unavailable; cache_misses will default to 0")
 
     def close_perf_counters(self):
         for counter_type in self.perf_fds.values():
@@ -138,9 +163,10 @@ int trace_sched_switch(struct pt_regs *ctx) {{
                 except OSError:
                     pass
 
-        self.perf_fds = {'instructions': {}, 'cycles': {}}
-        self.prev_counters = {'instructions': {}, 'cycles': {}}
+        self.perf_fds = {'instructions': {}, 'cycles': {}, 'cache_misses': {}}
+        self.prev_counters = {'instructions': {}, 'cycles': {}, 'cache_misses': {}}
         self.ipc_supported = False
+        self.cache_miss_supported = False
 
     def read_counter(self, fd):
         """Read current perf counter value from FD."""
@@ -161,7 +187,9 @@ int trace_sched_switch(struct pt_regs *ctx) {{
 
         instructions_delta = 0
         cycles_delta = 0
+        cache_miss_delta = 0
         ipc_value = 0.0
+        cache_miss_available = 0
 
         if self.ipc_supported:
             cpu_id = event.cpu
@@ -186,6 +214,20 @@ int trace_sched_switch(struct pt_regs *ctx) {{
                     self.stats['ipc_samples'] += 1
                 else:
                     self.stats['zero_cycle_windows'] += 1
+
+                cache_fd = self.perf_fds['cache_misses'].get(cpu_id)
+                if cache_fd is not None:
+                    cache_miss_available = 1
+                    cache_now = self.read_counter(cache_fd)
+                    if cache_now is not None:
+                        prev_cache = self.prev_counters['cache_misses'].get(cpu_id)
+                        if prev_cache is not None and cache_now >= prev_cache:
+                            cache_miss_delta = cache_now - prev_cache
+                        self.prev_counters['cache_misses'][cpu_id] = cache_now
+                        if cache_miss_delta > 0:
+                            self.stats['cache_miss_samples'] += 1
+                    else:
+                        self.stats['cache_counter_read_errors'] += 1
             else:
                 self.stats['counter_read_errors'] += 1
         
@@ -198,8 +240,10 @@ int trace_sched_switch(struct pt_regs *ctx) {{
             'runtime_ms': round(event.runtime_ns / 1_000_000, 3),
             'instructions_retired': int(instructions_delta),
             'cycles': int(cycles_delta),
+            'cache_misses': int(cache_miss_delta),
             'ipc': round(ipc_value, 4),
-            'ipc_available': 1 if self.ipc_supported else 0
+            'ipc_available': 1 if self.ipc_supported else 0,
+            'cache_miss_available': cache_miss_available
         }
         
         self.data_buffer.append(record)
@@ -243,6 +287,11 @@ int trace_sched_switch(struct pt_regs *ctx) {{
                 print(f"[*] IPC samples with valid cycles: {self.stats['ipc_samples']}")
             else:
                 print("[*] IPC collection mode: fallback (hardware counters unavailable)")
+
+            if self.cache_miss_supported:
+                print(f"[*] Cache-miss samples with non-zero deltas: {self.stats['cache_miss_samples']}")
+            else:
+                print("[*] Cache-miss collection mode: fallback (counter unavailable)")
             self.close_perf_counters()
             print(f"[*] Data saved to {self.output_file}")
 

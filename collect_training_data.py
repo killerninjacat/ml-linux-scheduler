@@ -111,7 +111,7 @@ class TrainingDataCollector:
 
     def validate_pmc_output(self, pmc_output, strict=False):
         """
-        Validate that the PMC collector produced IPC fields.
+        Validate that the PMC collector produced IPC/cache fields.
         strict=False: soft warning during startup.
         strict=True: stronger warning after collection finishes.
         """
@@ -137,7 +137,14 @@ class TrainingDataCollector:
             return
 
         sample_keys = set(samples[0].keys())
-        required = {'instructions_retired', 'cycles', 'ipc', 'ipc_available'}
+        required = {
+            'instructions_retired',
+            'cycles',
+            'cache_misses',
+            'ipc',
+            'ipc_available',
+            'cache_miss_available',
+        }
         missing = required - sample_keys
 
         if missing:
@@ -146,6 +153,8 @@ class TrainingDataCollector:
 
         ipc_available_count = sum(int(s.get('ipc_available', 0)) for s in samples)
         nonzero_ipc_count = sum(1 for s in samples if float(s.get('ipc', 0.0)) > 0)
+        cache_available_count = sum(int(s.get('cache_miss_available', 0)) for s in samples)
+        nonzero_cache_count = sum(1 for s in samples if int(s.get('cache_misses', 0)) > 0)
         ts_values = [int(s.get('timestamp', 0)) for s in samples if 'timestamp' in s]
 
         if ipc_available_count == 0:
@@ -161,6 +170,11 @@ class TrainingDataCollector:
                 print("[✓] PMC timestamps look epoch-aligned")
 
         print(f"[*] PMC IPC non-zero sample windows: {nonzero_ipc_count}/{len(samples)}")
+        if cache_available_count == 0:
+            print("[!] PMC cache-miss fallback mode active: cache counter unavailable")
+        else:
+            print(f"[✓] PMC cache-miss field active ({cache_available_count}/{len(samples)} samples report availability)")
+        print(f"[*] PMC cache-miss non-zero sample windows: {nonzero_cache_count}/{len(samples)}")
 
     # ---------------------------------------------------
 

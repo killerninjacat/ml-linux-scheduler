@@ -212,6 +212,12 @@ def run_experiment(
     else:
         print("[!] IPC feature is missing from dataset")
 
+    if "cache_misses" in feature_index:
+        cache_values = X_train_raw[:, feature_index["cache_misses"]]
+        print(f"[*] Cache-misses range (train): {cache_values.min():.4f} -> {cache_values.max():.4f}")
+    else:
+        print("[!] Cache-misses feature is missing from dataset")
+
     input_size = X_train_scaled.shape[1]
     model = SchedulerMLP(input_size)
 

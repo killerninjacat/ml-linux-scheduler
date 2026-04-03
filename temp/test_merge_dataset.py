@@ -52,6 +52,9 @@ def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_da
     if "ipc" not in pmc.columns:
         pmc["ipc"] = 0.0
 
+    if "cache_misses" not in pmc.columns:
+        pmc["cache_misses"] = 0
+
     print("[*] Merging State with PMCs (src_cpu -> cpu)...")
     merged = pd.merge_asof(
         state,
@@ -79,13 +82,17 @@ def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_da
     merged["ipc"] = pd.to_numeric(merged.get("ipc", 0.0), errors="coerce")
     merged["ipc"] = merged["ipc"].replace([np.inf, -np.inf], np.nan).fillna(0)
 
+    merged["cache_misses"] = pd.to_numeric(merged.get("cache_misses", 0), errors="coerce")
+    merged["cache_misses"] = merged["cache_misses"].replace([np.inf, -np.inf], np.nan).fillna(0)
+    merged["cache_misses"] = merged["cache_misses"].clip(lower=0)
+
     merged.to_csv(output_file, index=False)
     print(f"[✓] Success! Processed {len(merged)} samples into {output_file}")
     return merged
 
 
 def validate_output(df):
-    required_columns = ["decision", "power_watts", "ipc"]
+    required_columns = ["decision", "power_watts", "ipc", "cache_misses"]
     missing_columns = [c for c in required_columns if c not in df.columns]
     if missing_columns:
         raise AssertionError(f"Missing required columns: {missing_columns}")
@@ -96,12 +103,19 @@ def validate_output(df):
     if not np.isfinite(df["ipc"]).all():
         raise AssertionError("ipc contains non-finite values")
 
+    if not np.isfinite(df["cache_misses"]).all():
+        raise AssertionError("cache_misses contains non-finite values")
+
     if (df["power_watts"] < 0).any():
         raise AssertionError("power_watts contains negative values")
+
+    if (df["cache_misses"] < 0).any():
+        raise AssertionError("cache_misses contains negative values")
 
     print("[✓] Validation passed")
     print(f"[*] power_watts range: {df['power_watts'].min():.3f} -> {df['power_watts'].max():.3f}")
     print(f"[*] ipc range: {df['ipc'].min():.3f} -> {df['ipc'].max():.3f}")
+    print(f"[*] cache_misses range: {df['cache_misses'].min():.3f} -> {df['cache_misses'].max():.3f}")
 
 
 def main():

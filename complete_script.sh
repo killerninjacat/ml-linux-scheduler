@@ -67,11 +67,11 @@ echo "  STATE=$STATE"
 echo "  PMC=$PMC"
 echo "  RAPL=$RAPL"
 
-log "Quick IPC sanity check (first 2000 PMC rows)..."
+log "Quick IPC/cache sanity check (first 2000 PMC rows)..."
 python -c '
 import json, sys
 pmc = sys.argv[1]
-total = avail = nonzero = 0
+total = ipc_avail = ipc_nonzero = cache_avail = cache_nonzero = 0
 with open(pmc, "r") as f:
     for i, line in enumerate(f):
         if i >= 2000:
@@ -81,15 +81,21 @@ with open(pmc, "r") as f:
             continue
         r = json.loads(line)
         total += 1
-        avail += int(r.get("ipc_available", 0))
-        nonzero += 1 if float(r.get("ipc", 0.0)) > 0 else 0
+        ipc_avail += int(r.get("ipc_available", 0))
+        ipc_nonzero += 1 if float(r.get("ipc", 0.0)) > 0 else 0
+        cache_avail += int(r.get("cache_miss_available", 0))
+        cache_nonzero += 1 if int(r.get("cache_misses", 0)) > 0 else 0
 print(f"PMC samples checked: {total}")
-print(f"ipc_available count: {avail}")
-print(f"ipc > 0 count: {nonzero}")
+print(f"ipc_available count: {ipc_avail}")
+print(f"ipc > 0 count: {ipc_nonzero}")
+print(f"cache_miss_available count: {cache_avail}")
+print(f"cache_misses > 0 count: {cache_nonzero}")
 if total == 0:
     print("WARNING: PMC file has no rows")
-elif avail == 0:
+elif ipc_avail == 0:
     print("WARNING: IPC fallback mode detected (hardware counters unavailable)")
+if total > 0 and cache_avail == 0:
+  print("WARNING: Cache-miss fallback mode detected (counter unavailable)")
 ' "$PMC"
 
 mkdir -p data/processed results temp models/final models/final_bce models/ablation
