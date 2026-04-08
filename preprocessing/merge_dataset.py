@@ -42,6 +42,18 @@ def main():
     parser.add_argument("--pmc", required=True)
     parser.add_argument("--rapl", required=True)
     parser.add_argument("--output", default="training_ready_dataset.csv")
+    parser.add_argument(
+        "--pmc-tolerance-ms",
+        type=float,
+        default=50.0,
+        help="Maximum age gap (ms) when matching state rows to PMC rows",
+    )
+    parser.add_argument(
+        "--rapl-tolerance-ms",
+        type=float,
+        default=100.0,
+        help="Maximum absolute gap (ms) when matching merged rows to RAPL rows",
+    )
     args = parser.parse_args()
 
     print("[*] Loading datasets...")
@@ -75,6 +87,11 @@ def main():
     if 'cache_miss_available' not in pmc.columns:
         pmc['cache_miss_available'] = 0
 
+    pmc_tolerance_ns = int(args.pmc_tolerance_ms * 1_000_000)
+    rapl_tolerance_ns = int(args.rapl_tolerance_ms * 1_000_000)
+    print(f"[*] PMC merge tolerance: {args.pmc_tolerance_ms:.1f} ms")
+    print(f"[*] RAPL merge tolerance: {args.rapl_tolerance_ms:.1f} ms")
+
     # 1. Align PMCs to the Source CPU
     # We map the PMC activity of the 'src_cpu' to the decision being made
     print("[*] Merging State with PMCs (Mapping to src_cpu)...")
@@ -84,8 +101,12 @@ def main():
         on="timestamp",
         left_by="src_cpu",
         right_by="cpu",
-        direction="backward"
+        direction="backward",
+        tolerance=pmc_tolerance_ns,
     )
+
+    pmc_unmatched_ratio = merged['runtime_ns'].isna().mean() if 'runtime_ns' in merged.columns else 1.0
+    print(f"[*] PMC unmatched rows after tolerance: {pmc_unmatched_ratio * 100:.2f}%")
 
     # 2. Merge with RAPL Energy
     print("[*] Merging with RAPL energy data...")
@@ -93,8 +114,12 @@ def main():
         merged,
         rapl,
         on="timestamp",
-        direction="nearest"
+        direction="nearest",
+        tolerance=rapl_tolerance_ns,
     )
+
+    rapl_unmatched_ratio = merged['power_watts'].isna().mean() if 'power_watts' in merged.columns else 1.0
+    print(f"[*] RAPL unmatched rows after tolerance: {rapl_unmatched_ratio * 100:.2f}%")
 
     # 3. FEATURE ENGINEERING: Power was computed in RAPL table prior to merge.
     print("[*] Using precomputed RAPL power values...")

@@ -11,18 +11,20 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, f1_score, precision_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 
 class SchedulerMLP(nn.Module):
-    def __init__(self, input_size):
+    def __init__(self, input_size, hidden_dim=32, dropout=0.1):
         super(SchedulerMLP, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_size, 12),
+            nn.Linear(input_size, hidden_dim),
             nn.ReLU(),
-            nn.Linear(12, 1)
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1)
         )
 
     def forward(self, x):
@@ -172,6 +174,24 @@ def compute_energy_case_stats(X_raw, y_probs, feature_index, power_threshold, ip
     }
 
 
+def find_best_threshold(y_true, y_probs, step=0.01):
+    if step <= 0 or step >= 1:
+        step = 0.01
+
+    thresholds = np.arange(step, 1.0, step)
+    best_threshold = 0.5
+    best_f1 = -1.0
+
+    for threshold in thresholds:
+        y_pred = (y_probs > threshold).astype(int)
+        score = f1_score(y_true, y_pred, zero_division=0)
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = float(threshold)
+
+    return best_threshold, best_f1
+
+
 def run_experiment(
     data_bundle,
     args,
@@ -219,11 +239,18 @@ def run_experiment(
         print("[!] Cache-misses feature is missing from dataset")
 
     input_size = X_train_scaled.shape[1]
-    model = SchedulerMLP(input_size)
+    model = SchedulerMLP(
+        input_size,
+        hidden_dim=args.hidden_dim,
+        dropout=args.dropout,
+    )
 
     if args.resume and os.path.exists(model_path):
         print("[*] Resuming from previous model state...")
-        model.load_state_dict(torch.load(model_path, map_location="cpu"))
+        try:
+            model.load_state_dict(torch.load(model_path, map_location="cpu"))
+        except RuntimeError as exc:
+            print(f"[!] Resume skipped due to architecture mismatch: {exc}")
 
     num_pos = float((y_train == 1).sum())
     num_neg = float((y_train == 0).sum())
@@ -254,42 +281,115 @@ def run_experiment(
     else:
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     X_train_tensor = torch.FloatTensor(X_train_scaled.copy())
     X_train_raw_tensor = torch.FloatTensor(X_train_raw.copy())
     y_train_tensor = torch.FloatTensor(y_train.copy())
 
+    X_val_tensor = torch.FloatTensor(X_val_scaled.copy())
+    X_val_raw_tensor = torch.FloatTensor(X_val_raw.copy())
+    y_val_tensor = torch.FloatTensor(y_val.copy())
+
+    train_dataset = TensorDataset(X_train_tensor, X_train_raw_tensor, y_train_tensor)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+    )
+
+    best_val_loss = float("inf")
+    best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    patience_counter = 0
+
     model.train()
     print(f"[*] Training for {args.epochs} epochs (class weight: {pos_weight.item():.2f}x)")
+    print(
+        f"[*] Training config: batch_size={args.batch_size}, "
+        f"hidden_dim={args.hidden_dim}, dropout={args.dropout}, "
+        f"weight_decay={args.weight_decay}, patience={args.patience}"
+    )
+
     for epoch in range(args.epochs):
-        optimizer.zero_grad()
-        logits = model(X_train_tensor)
+        model.train()
+        epoch_samples = 0
+        epoch_components = {
+            "bce": 0.0,
+            "power": 0.0,
+            "ipc": 0.0,
+            "total": 0.0,
+        }
 
-        if loss_mode == "energy":
-            loss, components = criterion(logits, y_train_tensor, X_train_raw_tensor)
+        for batch_scaled, batch_raw, batch_y in train_loader:
+            optimizer.zero_grad()
+            logits = model(batch_scaled)
+
+            if loss_mode == "energy":
+                loss, components = criterion(logits, batch_y, batch_raw)
+            else:
+                loss = criterion(logits, batch_y)
+                components = {
+                    "bce": float(loss.item()),
+                    "power": 0.0,
+                    "ipc": 0.0,
+                    "total": float(loss.item()),
+                }
+
+            loss.backward()
+            optimizer.step()
+
+            batch_size_actual = batch_y.shape[0]
+            epoch_samples += batch_size_actual
+            for key in epoch_components:
+                epoch_components[key] += components[key] * batch_size_actual
+
+        if epoch_samples > 0:
+            for key in epoch_components:
+                epoch_components[key] /= epoch_samples
+
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(X_val_tensor)
+            if loss_mode == "energy":
+                val_loss, _ = criterion(val_logits, y_val_tensor, X_val_raw_tensor)
+            else:
+                val_loss = criterion(val_logits, y_val_tensor)
+
+            y_val_probs = torch.sigmoid(val_logits).numpy().reshape(-1)
+            y_val_pred = (y_val_probs > 0.5).astype(int)
+            y_val_true = y_val.reshape(-1).astype(int)
+            val_f1 = f1_score(y_val_true, y_val_pred, zero_division=0)
+
+        val_loss_value = float(val_loss.detach().cpu().item())
+
+        if val_loss_value < (best_val_loss - args.min_delta):
+            best_val_loss = val_loss_value
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            patience_counter = 0
         else:
-            loss = criterion(logits, y_train_tensor)
-            components = {
-                "bce": float(loss.item()),
-                "power": 0.0,
-                "ipc": 0.0,
-                "total": float(loss.item()),
-            }
-
-        loss.backward()
-        optimizer.step()
+            patience_counter += 1
 
         report_interval = max(1, args.epochs // 4)
         if (epoch + 1) % report_interval == 0 or epoch == 0:
             print(
                 "    Epoch "
                 f"[{epoch + 1}/{args.epochs}] "
-                f"Total={components['total']:.4f} "
-                f"BCE={components['bce']:.4f} "
-                f"Power={components['power']:.4f} "
-                f"IPC={components['ipc']:.4f}"
+                f"TrainTotal={epoch_components['total']:.4f} "
+                f"TrainBCE={epoch_components['bce']:.4f} "
+                f"TrainPower={epoch_components['power']:.4f} "
+                f"TrainIPC={epoch_components['ipc']:.4f} "
+                f"ValLoss={val_loss_value:.4f} "
+                f"ValF1@0.5={val_f1:.4f}"
             )
+
+        if args.patience > 0 and patience_counter >= args.patience:
+            print(
+                f"[*] Early stopping at epoch {epoch + 1} "
+                f"(best val loss={best_val_loss:.4f})"
+            )
+            break
+
+    model.load_state_dict(best_state)
 
     torch.save(model.state_dict(), model_path)
     joblib.dump({"scaler": scaler, "feature_columns": feature_columns}, scaler_path)
@@ -305,6 +405,11 @@ def run_experiment(
                 "energy_beta": args.energy_beta,
                 "power_threshold": args.power_threshold,
                 "ipc_threshold": args.ipc_threshold,
+                "batch_size": args.batch_size,
+                "hidden_dim": args.hidden_dim,
+                "dropout": args.dropout,
+                "weight_decay": args.weight_decay,
+                "best_val_loss": best_val_loss,
                 "feature_columns": feature_columns,
             },
             f,
@@ -313,10 +418,24 @@ def run_experiment(
 
     model.eval()
     with torch.no_grad():
-        X_val_tensor = torch.FloatTensor(X_val_scaled.copy())
         y_probs = torch.sigmoid(model(X_val_tensor)).numpy().reshape(-1)
-        y_pred = (y_probs > 0.5).astype(int)
         y_true = y_val.reshape(-1).astype(int)
+
+        if args.decision_threshold is not None:
+            decision_threshold = float(args.decision_threshold)
+            threshold_source = "manual"
+        elif args.no_optimize_threshold:
+            decision_threshold = 0.5
+            threshold_source = "fixed"
+        else:
+            decision_threshold, best_threshold_f1 = find_best_threshold(
+                y_true,
+                y_probs,
+                step=args.threshold_step,
+            )
+            threshold_source = f"optimized_f1={best_threshold_f1:.4f}"
+
+        y_pred = (y_probs > decision_threshold).astype(int)
 
         acc = accuracy_score(y_true, y_pred)
         pre = precision_score(y_true, y_pred, zero_division=0)
@@ -337,6 +456,7 @@ def run_experiment(
         "precision": float(pre),
         "f1": float(f1),
         "latency_us": float(latency),
+        "decision_threshold": float(decision_threshold),
         "energy_case_count": int(energy_case_stats["energy_case_count"]),
         "energy_case_avg_migrate_prob": float(energy_case_stats["energy_case_avg_migrate_prob"]),
     }
@@ -346,6 +466,7 @@ def run_experiment(
     print(f"Accuracy: {metrics['accuracy']:.4f}")
     print(f"Precision: {metrics['precision']:.4f}")
     print(f"F1-score: {metrics['f1']:.4f}")
+    print(f"Decision threshold: {metrics['decision_threshold']:.4f} ({threshold_source})")
     print(f"Inference latency: {metrics['latency_us']:.3f} us")
     print(
         "Energy-case diagnostics: "
@@ -435,6 +556,12 @@ def parse_args():
     )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--min-delta", type=float, default=1e-4)
+    parser.add_argument("--hidden-dim", type=int, default=32)
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true", help="Resume from saved model weights")
@@ -454,6 +581,9 @@ def parse_args():
     parser.add_argument("--energy-beta", type=float, default=0.01, help="Weight for IPC penalty")
     parser.add_argument("--power-threshold", type=float, default=35.0, help="Power threshold in watts")
     parser.add_argument("--ipc-threshold", type=float, default=0.9, help="IPC low-efficiency threshold")
+    parser.add_argument("--decision-threshold", type=float, default=None, help="Optional fixed probability threshold")
+    parser.add_argument("--threshold-step", type=float, default=0.01, help="Step size for threshold search")
+    parser.add_argument("--no-optimize-threshold", action="store_true", help="Disable validation threshold tuning")
     parser.add_argument("--disable-power-term", action="store_true")
     parser.add_argument("--disable-ipc-term", action="store_true")
     parser.add_argument("--metrics-output", default=None, help="Optional CSV path for metric output")

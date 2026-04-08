@@ -23,6 +23,8 @@ python3 preprocessing/merge_dataset.py \
   --state data/raw/state_YYYYMMDD_HHMMSS.jsonl \
   --pmc data/raw/pmc_YYYYMMDD_HHMMSS.jsonl \
   --rapl data/raw/rapl_YYYYMMDD_HHMMSS.jsonl \
+  --pmc-tolerance-ms 50 \
+  --rapl-tolerance-ms 100 \
   --output data/processed/final_dataset.csv
 ```
 
@@ -36,8 +38,12 @@ python3 train/train_and_validate_model.py \
   --model-dir models/final \
   --run-mode single \
   --loss-mode energy \
+  --batch-size 256 \
+  --patience 15 \
   --epochs 100
 ```
+
+By default the trainer now performs validation-threshold optimization for better F1/accuracy trade-off. Use --no-optimize-threshold to force a fixed 0.5 decision cutoff.
 
 ### Baseline BCE-only run
 
@@ -88,7 +94,7 @@ Then increase gradually while watching energy-case diagnostics from training out
 Use the full automation script:
 
 ```bash
-./complete_script.sh [duration] [epochs] [run_graphs] [energy_alpha] [energy_beta] [power_threshold] [ipc_threshold] [run_sweep] [alpha_grid] [beta_grid]
+./complete_script.sh [duration] [epochs] [run_graphs] [energy_alpha] [energy_beta] [power_threshold] [ipc_threshold] [run_sweep] [alpha_grid] [beta_grid] [pmc_tolerance_ms] [rapl_tolerance_ms] [batch_size] [patience] [hidden_dim] [dropout] [weight_decay] [no_optimize_threshold] [decision_threshold]
 ```
 
 Example:
@@ -97,10 +103,16 @@ Example:
 ./complete_script.sh 60 100 0 0.01 0.01 35.0 0.9
 ```
 
+Accuracy-focused example (tolerances + stronger trainer config + auto threshold):
+
+```bash
+./complete_script.sh 60 120 0 0.01 0.01 35.0 0.9 0 "0.005,0.01,0.02" "0.005,0.01,0.02" 50 100 256 15 32 0.1 1e-5 0
+```
+
 Sweep example (runs grid search and saves a ranked comparison table):
 
 ```bash
-./complete_script.sh 60 100 0 0.01 0.01 35.0 0.9 1 "0.005,0.01,0.02" "0.005,0.01,0.02"
+./complete_script.sh 60 100 0 0.01 0.01 35.0 0.9 1 "0.005,0.01,0.02" "0.005,0.01,0.02" 50 100 256 15 32 0.1 1e-5 0
 ```
 
 Sweep outputs:

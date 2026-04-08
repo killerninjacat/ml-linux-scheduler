@@ -11,6 +11,15 @@ IPC_THRESHOLD="${7:-0.9}"
 RUN_SWEEP="${8:-0}"
 ALPHA_GRID="${9:-0.005,0.01,0.02}"
 BETA_GRID="${10:-0.005,0.01,0.02}"
+PMC_TOLERANCE_MS="${11:-50}"
+RAPL_TOLERANCE_MS="${12:-100}"
+BATCH_SIZE="${13:-256}"
+PATIENCE="${14:-15}"
+HIDDEN_DIM="${15:-32}"
+DROPOUT="${16:-0.1}"
+WEIGHT_DECAY="${17:-1e-5}"
+NO_OPTIMIZE_THRESHOLD="${18:-0}"
+DECISION_THRESHOLD="${19:-}"
 
 log() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*" >&2; }
@@ -35,8 +44,21 @@ log "Refreshing sudo credentials..."
 sudo -v
 
 log "Energy loss parameters: alpha=${ENERGY_ALPHA}, beta=${ENERGY_BETA}, power_th=${POWER_THRESHOLD}, ipc_th=${IPC_THRESHOLD}"
+log "Merge tolerances: pmc=${PMC_TOLERANCE_MS}ms, rapl=${RAPL_TOLERANCE_MS}ms"
+log "Trainer config: batch_size=${BATCH_SIZE}, patience=${PATIENCE}, hidden_dim=${HIDDEN_DIM}, dropout=${DROPOUT}, weight_decay=${WEIGHT_DECAY}"
 if [[ "$RUN_SWEEP" == "1" ]]; then
   log "Sweep mode enabled with alpha_grid=${ALPHA_GRID} and beta_grid=${BETA_GRID}"
+fi
+
+THRESHOLD_ARGS=()
+if [[ -n "$DECISION_THRESHOLD" ]]; then
+  THRESHOLD_ARGS+=(--decision-threshold "$DECISION_THRESHOLD")
+  log "Threshold mode: manual (${DECISION_THRESHOLD})"
+elif [[ "$NO_OPTIMIZE_THRESHOLD" == "1" ]]; then
+  THRESHOLD_ARGS+=(--no-optimize-threshold)
+  log "Threshold mode: fixed 0.5"
+else
+  log "Threshold mode: auto-optimize on validation set"
 fi
 
 if [[ -r /proc/sys/kernel/perf_event_paranoid ]]; then
@@ -115,6 +137,12 @@ run_energy_training() {
     --energy-beta "$beta" \
     --power-threshold "$POWER_THRESHOLD" \
     --ipc-threshold "$IPC_THRESHOLD" \
+    --batch-size "$BATCH_SIZE" \
+    --patience "$PATIENCE" \
+    --hidden-dim "$HIDDEN_DIM" \
+    --dropout "$DROPOUT" \
+    --weight-decay "$WEIGHT_DECAY" \
+    "${THRESHOLD_ARGS[@]}" \
     --epochs "$EPOCHS" \
     --metrics-output "$metrics_file"
 }
@@ -128,6 +156,8 @@ python preprocessing/merge_dataset.py \
   --state "$STATE" \
   --pmc "$PMC" \
   --rapl "$RAPL" \
+  --pmc-tolerance-ms "$PMC_TOLERANCE_MS" \
+  --rapl-tolerance-ms "$RAPL_TOLERANCE_MS" \
   --output data/processed/final_dataset.csv
 
 log "Running merge validation..."
@@ -135,6 +165,8 @@ python temp/test_merge_dataset.py \
   --state "$STATE" \
   --pmc "$PMC" \
   --rapl "$RAPL" \
+  --pmc-tolerance-ms "$PMC_TOLERANCE_MS" \
+  --rapl-tolerance-ms "$RAPL_TOLERANCE_MS" \
   --output temp/merged_dataset_debug.csv
 
 log "Training energy-aware model..."
@@ -223,6 +255,12 @@ python train/train_and_validate_model.py \
   --model-dir models/final_bce \
   --run-mode single \
   --loss-mode bce \
+  --batch-size "$BATCH_SIZE" \
+  --patience "$PATIENCE" \
+  --hidden-dim "$HIDDEN_DIM" \
+  --dropout "$DROPOUT" \
+  --weight-decay "$WEIGHT_DECAY" \
+  "${THRESHOLD_ARGS[@]}" \
   --epochs "$EPOCHS" \
   --metrics-output results/single_bce_metrics.csv
 
@@ -235,6 +273,12 @@ python train/train_and_validate_model.py \
   --energy-beta "$ENERGY_BETA" \
   --power-threshold "$POWER_THRESHOLD" \
   --ipc-threshold "$IPC_THRESHOLD" \
+  --batch-size "$BATCH_SIZE" \
+  --patience "$PATIENCE" \
+  --hidden-dim "$HIDDEN_DIM" \
+  --dropout "$DROPOUT" \
+  --weight-decay "$WEIGHT_DECAY" \
+  "${THRESHOLD_ARGS[@]}" \
   --epochs "$EPOCHS" \
   --metrics-output results/ablation_results.csv
 

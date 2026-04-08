@@ -31,7 +31,14 @@ def align_timestamp_domain(reference_df, candidate_df):
     return candidate_df
 
 
-def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_dataset.csv"):
+def preprocess_and_merge(
+    state_path,
+    pmc_path,
+    rapl_path,
+    output_file="merged_dataset.csv",
+    pmc_tolerance_ms=50.0,
+    rapl_tolerance_ms=100.0,
+):
     print(f"[*] Loading State: {state_path}")
     state = load_jsonl(state_path)
 
@@ -55,7 +62,10 @@ def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_da
     if "cache_misses" not in pmc.columns:
         pmc["cache_misses"] = 0
 
-    print("[*] Merging State with PMCs (src_cpu -> cpu)...")
+    pmc_tolerance_ns = int(pmc_tolerance_ms * 1_000_000)
+    rapl_tolerance_ns = int(rapl_tolerance_ms * 1_000_000)
+
+    print(f"[*] Merging State with PMCs (src_cpu -> cpu, tolerance={pmc_tolerance_ms:.1f}ms)...")
     merged = pd.merge_asof(
         state,
         pmc,
@@ -63,14 +73,16 @@ def preprocess_and_merge(state_path, pmc_path, rapl_path, output_file="merged_da
         left_by="src_cpu",
         right_by="cpu",
         direction="backward",
+        tolerance=pmc_tolerance_ns,
     )
 
-    print("[*] Merging with RAPL energy data...")
+    print(f"[*] Merging with RAPL energy data (tolerance={rapl_tolerance_ms:.1f}ms)...")
     merged = pd.merge_asof(
         merged,
         rapl,
         on="timestamp",
         direction="nearest",
+        tolerance=rapl_tolerance_ns,
     )
 
     merged["power_watts"] = pd.to_numeric(merged.get("power_watts", 0.0), errors="coerce")
@@ -124,9 +136,18 @@ def main():
     parser.add_argument("--pmc", required=True)
     parser.add_argument("--rapl", required=True)
     parser.add_argument("--output", default="temp/merged_dataset_debug.csv")
+    parser.add_argument("--pmc-tolerance-ms", type=float, default=50.0)
+    parser.add_argument("--rapl-tolerance-ms", type=float, default=100.0)
     args = parser.parse_args()
 
-    merged = preprocess_and_merge(args.state, args.pmc, args.rapl, args.output)
+    merged = preprocess_and_merge(
+        args.state,
+        args.pmc,
+        args.rapl,
+        args.output,
+        pmc_tolerance_ms=args.pmc_tolerance_ms,
+        rapl_tolerance_ms=args.rapl_tolerance_ms,
+    )
     validate_output(merged)
 
 
